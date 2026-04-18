@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches Firebase Auth UID)
+    // Fields:
+    //   - email: string (required) - User's email
+    //   - isPro: boolean (required) - Whether the user has unlocked Pro
+    //   - createdAt: timestamp (required) - When the account was created
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['email', 'isPro', 'createdAt']) &&
+             isValidEmail(data.email) &&
+             data.isPro is bool &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      
+      // Allow users to create their own profile, but they cannot set isPro to true initially
+      allow create: if isOwner(userId) && 
+                    isValidUser(request.resource.data) && 
+                    request.resource.data.isPro == false;
+      
+      // Allow users to update their own profile.
+      // HARDENED: Users cannot change their own Pro status. This must be done by the backend webhook.
+      allow update: if isOwner(userId) && 
+                    isValidUser(request.resource.data) &&
+                    request.resource.data.createdAt == resource.data.createdAt &&
+                    request.resource.data.email == resource.data.email &&
+                    request.resource.data.isPro == resource.data.isPro;
+    }
+  }
+}

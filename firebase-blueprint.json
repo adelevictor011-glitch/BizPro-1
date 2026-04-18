@@ -1,0 +1,34 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing subscription status",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's email address"
+        },
+        "isPro": {
+          "type": "boolean",
+          "description": "Whether the user has unlocked the Pro version"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user account was created"
+        }
+      },
+      "required": ["email", "isPro", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "Stores user profiles and their pro status."
+    }
+  }
+}
