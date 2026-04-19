@@ -299,9 +299,15 @@ export default function App() {
     try {
       await signInWithPopup(auth, googleProvider);
       toast.success("Successfully logged in!");
-    } catch (error) {
-      console.error(error);
-      toast.error("Failed to log in.");
+    } catch (error: any) {
+      console.error("Login Error:", error);
+      if (error?.code === 'auth/unauthorized-domain') {
+        toast.error("Vercel domain must be authorized in Firebase Console.");
+      } else if (error?.code === 'auth/popup-closed-by-user') {
+        toast.error("Login cancelled. You closed the popup.");
+      } else {
+        toast.error(`Login failed: ${error?.message || "Try again later."}`);
+      }
     }
   };
 
