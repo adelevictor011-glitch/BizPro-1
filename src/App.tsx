@@ -281,8 +281,11 @@ export default function App() {
             });
             setHasUnlockedPremium(false);
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error("Error fetching user profile:", error);
+          if (error?.message?.includes("client is offline") || error?.message?.includes("offline")) {
+            toast.error("Database connection blocked. Please disable your AdBlocker or VPN.");
+          }
         }
       } else {
         setHasUnlockedPremium(false);
