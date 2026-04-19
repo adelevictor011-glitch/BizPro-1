@@ -529,7 +529,7 @@ export default function App() {
     }
     
     const userEmail = user?.email || email;
-    const subject = encodeURIComponent("[Business Prompt Idea] New Expert Review Request - PromptBuilder Pro");
+    const subject = encodeURIComponent("[Business Prompt Idea] New Expert Review Request - Foundeck");
     const body = encodeURIComponent(`Hello,\n\nI would like to request an Expert Review.\n\nMy Email: ${userEmail}\nTier: ${expertPricing.tier}\nItems Selected: ${selectedOptions.size}\n\nPlease send me the payment link.`);
     
     // Open the user's default email client
@@ -562,7 +562,7 @@ export default function App() {
             <div className="bg-primary/10 p-2 rounded-lg">
               <BrainCircuit className="w-6 h-6 text-primary" />
             </div>
-            <span className="font-bold text-xl tracking-tight">PromptBuilder Pro</span>
+            <span className="font-bold text-xl tracking-tight">Foundeck</span>
           </div>
           <nav className="flex items-center gap-4 text-sm font-medium">
             {!hasUnlockedPremium && (
