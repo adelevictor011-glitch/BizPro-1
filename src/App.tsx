@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,17 +6,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { 
   BrainCircuit, Target, Briefcase, Copy, CheckSquare, 
   Megaphone, Palette, DollarSign, Settings, Box, Sparkles,
-  LineChart, HeartHandshake, BarChart3, Handshake, Lock, Mail, ExternalLink, ArrowRight, Star, Plus, Scale, Users, LogIn, LogOut
+  LineChart, HeartHandshake, BarChart3, Handshake, Lock, Mail, ExternalLink, ArrowRight, Star, Plus, Scale, Users, LogIn, LogOut, MessageSquarePlus, LifeBuoy, MessageCircle
 } from "lucide-react";
 
 import { auth, db, googleProvider } from "./firebase";
 import { signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, addDoc } from "firebase/firestore";
 import { usePaystackPayment } from "react-paystack";
 
 // Base categories before randomization
@@ -223,7 +223,13 @@ export default function App() {
   const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [showPremiumDialog, setShowPremiumDialog] = useState(false);
   const [showExpertDialog, setShowExpertDialog] = useState(false);
+  const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
   
+  // Feedback state
+  const [feedbackType, setFeedbackType] = useState('feature');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+
   // User state
   const [user, setUser] = useState<User | null>(null);
   const [hasUnlockedPremium, setHasUnlockedPremium] = useState(false);
@@ -406,7 +412,7 @@ export default function App() {
     setSelectedOptions(prev => new Set(prev).add(newOpt.id));
   };
 
-  const generatePrompt = () => {
+  const generatePrompt = useMemo(() => {
     if (!niche || !audience) return "Please enter your business niche and target audience first.";
     if (selectedOptions.size === 0) return "Please select at least one aspect of your business to generate a prompt.";
 
@@ -438,9 +444,9 @@ export default function App() {
     prompt += `Format your response clearly using markdown headers, bullet points, and bold text for emphasis. Remember: Start ONLY with your clarifying questions.`;
 
     return prompt;
-  };
+  }, [niche, audience, selectedOptions, categories, customOptions]);
 
-  const generatedPrompt = generatePrompt();
+  const generatedPrompt = generatePrompt;
 
   const handleCopyRequest = () => {
     if (!niche || !audience || selectedOptions.size === 0) {
@@ -539,6 +545,30 @@ export default function App() {
     setShowExpertDialog(false);
   };
 
+  const handleFeedbackSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedbackMessage.trim()) return;
+    
+    setIsSubmittingFeedback(true);
+    try {
+      await addDoc(collection(db, "feedback"), {
+        userId: user?.uid || null,
+        email: user?.email || email || null,
+        type: feedbackType,
+        message: feedbackMessage.trim(),
+        createdAt: serverTimestamp()
+      });
+      toast.success("Thanks! Your feedback helps us improve Foundeck.");
+      setShowFeedbackDialog(false);
+      setFeedbackMessage("");
+    } catch (error) {
+      console.error("Error submitting feedback:", error);
+      toast.error("Failed to submit. Please try again.");
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
+  };
+
   const getExpertPricing = () => {
     const count = selectedOptions.size;
     if (count === 0) return { flat: 0, equity: 0, tier: "None" };
@@ -554,57 +584,65 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground selection:bg-primary/30 pb-24">
+    <div className="min-h-screen relative bg-slate-50 dark:bg-slate-950 text-foreground selection:bg-indigo-500/30 pb-24 font-sans isolation-auto transition-colors duration-300">
+      {/* Subtle modern background radial gradient for depth */}
+      <div className="fixed inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-100/60 via-transparent to-transparent dark:from-indigo-900/20 dark:via-background dark:to-background pointer-events-none"></div>
+
       {/* Header */}
-      <header className="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-primary/10 p-2 rounded-lg">
-              <BrainCircuit className="w-6 h-6 text-primary" />
+      <header className="sticky top-0 z-50 border-b border-border/40 bg-background/80 backdrop-blur-lg supports-[backdrop-filter]:bg-background/60 shadow-sm">
+        <div className="container mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-primary p-2 rounded-xl shadow-inner shadow-white/20">
+              <BrainCircuit className="w-5 h-5 text-primary-foreground" />
             </div>
-            <span className="font-bold text-xl tracking-tight">Foundeck</span>
+            <span className="font-bold text-xl tracking-tight hidden sm:inline-block">Foundeck</span>
           </div>
-          <nav className="flex items-center gap-4 text-sm font-medium">
+          <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium">
+            <Button variant="ghost" size="sm" onClick={() => setShowFeedbackDialog(true)} className="hidden md:flex text-muted-foreground hover:text-foreground">
+              <LifeBuoy className="w-4 h-4 mr-2" />
+              Community & Help
+            </Button>
+            
             {!hasUnlockedPremium && (
-              <Button variant="outline" size="sm" onClick={() => setShowPremiumDialog(true)} className="hidden sm:flex border-amber-500/50 text-amber-600 hover:bg-amber-500/10">
-                <Lock className="w-4 h-4 mr-2" />
+              <Button variant="outline" size="sm" onClick={() => setShowPremiumDialog(true)} className="hidden sm:flex border-amber-500/50 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 bg-amber-50 dark:bg-amber-500/10 shadow-sm">
+                <Lock className="w-3.5 h-3.5 mr-2" />
                 Unlock Pro ($15)
               </Button>
             )}
-            <Button size="sm" onClick={() => setShowExpertDialog(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-              <Star className="w-4 h-4 mr-2" />
-              Expert Review
+            <Button size="sm" onClick={() => setShowExpertDialog(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20">
+              <Star className="w-3.5 h-3.5 sm:mr-2" />
+              <span className="hidden sm:inline">Expert Review</span>
             </Button>
             {user ? (
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
+              <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground hover:text-foreground">
+                <LogOut className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Logout</span>
               </Button>
             ) : (
-              <Button variant="ghost" size="sm" onClick={handleLogin}>
-                <LogIn className="w-4 h-4 mr-2" />
-                Login
+              <Button variant="ghost" size="sm" onClick={handleLogin} className="text-muted-foreground hover:text-foreground">
+                <LogIn className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Login</span>
               </Button>
             )}
           </nav>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-12 max-w-7xl">
-        <div className="text-center space-y-4 mb-12">
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-balance">
-            Build Your Ultimate Business Prompt
+      <main className="container mx-auto px-4 lg:px-8 py-10 md:py-16 max-w-7xl animate-in fade-in duration-500 slide-in-from-bottom-6">
+        <div className="text-center space-y-4 mb-16">
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-balance text-slate-900 dark:text-slate-50">
+            Build Your Ultimate <span className="text-indigo-600 dark:text-indigo-400">Business Prompt</span>
           </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto text-balance">
-            Select the exact aspects of your business you need help with. We generate a robust, hallucination-free prompt that forces AI to ask clarifying questions before building your plan.
+          <p className="text-lg md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto text-balance leading-relaxed">
+            Select the exact aspects of your business you need help with. We generate a robust, hallucination-free prompt for AI that guarantees high-quality results.
           </p>
         </div>
 
-        <div className="grid lg:grid-cols-12 gap-8">
+        <div className="grid lg:grid-cols-12 gap-8 items-start">
           
           {/* Left Column: Inputs & Checkboxes */}
           <div className="lg:col-span-7 space-y-8">
-            <Card className="border-border/50 shadow-sm">
+            <Card className="border-border/50 shadow-md transition-all hover:shadow-lg bg-card/80 backdrop-blur-sm">
               <CardHeader className="bg-muted/10 border-b border-border/40">
                 <CardTitle className="flex items-center gap-2">
                   <Target className="w-5 h-5 text-primary" />
@@ -778,26 +816,26 @@ export default function App() {
           {/* Right Column: Generated Prompt & Affiliates */}
           <div className="lg:col-span-5 space-y-6">
             <div className="sticky top-24 space-y-6">
-              <Card className="border-primary/20 shadow-lg shadow-primary/5">
+              <Card className="border-primary/20 shadow-xl shadow-indigo-600/5 bg-gradient-to-b from-card to-card/50 backdrop-blur-md">
                 <CardHeader className="bg-primary/5 border-b border-primary/10 pb-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <CardTitle className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-primary" />
+                      <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                       Your Master Prompt
                     </CardTitle>
-                    <Button onClick={handleCopyRequest} size="sm" className="font-semibold">
+                    <Button onClick={handleCopyRequest} size="sm" className="font-semibold w-full sm:w-auto shadow-sm">
                       <Copy className="w-4 h-4 mr-2" />
                       Copy Prompt
                     </Button>
                   </div>
-                  <CardDescription>
-                    Paste this into ChatGPT, Claude, or Gemini. It forces the AI to ask you questions before generating the plan.
+                  <CardDescription className="text-balance leading-relaxed">
+                    Paste this into ChatGPT, Claude, or Gemini. It forces the AI to structure a perfect response.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-0">
-                  <ScrollArea className="h-[400px] w-full rounded-b-xl bg-muted/30">
+                  <ScrollArea className="h-[400px] lg:h-[500px] w-full rounded-b-xl bg-slate-100/50 dark:bg-slate-900/50">
                     <div className="p-6">
-                      <pre className="whitespace-pre-wrap font-mono text-sm text-foreground/80 leading-relaxed">
+                      <pre className="whitespace-pre-wrap font-mono text-[13px] text-slate-700 dark:text-slate-300 leading-relaxed selection:bg-indigo-200 dark:selection:bg-indigo-900">
                         {generatedPrompt}
                       </pre>
                     </div>
@@ -806,7 +844,7 @@ export default function App() {
               </Card>
 
               {/* Affiliate / Partner Section */}
-              <Card className="border-border/50 bg-muted/10">
+              <Card className="border-border/40 shadow-sm bg-card/80 backdrop-blur-sm">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
                     <Briefcase className="w-4 h-4" />
@@ -923,22 +961,22 @@ export default function App() {
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-            <div className="bg-muted p-4 rounded-lg text-sm">
+            <div className="bg-slate-100 dark:bg-slate-900 shadow-inner p-4 rounded-xl text-sm border border-border/40">
               {selectedOptions.size === 0 ? (
                 <p className="text-amber-600 font-medium">Please select some business aspects first to calculate your review pricing.</p>
               ) : (
                 <>
                   <div className="flex justify-between items-center mb-3 pb-3 border-b border-border/50">
-                    <span className="font-semibold">Your Scope:</span>
+                    <span className="font-semibold text-foreground">Your Scope:</span>
                     <Badge variant="secondary">{selectedOptions.size} items selected ({expertPricing.tier} Tier)</Badge>
                   </div>
-                  <p className="font-semibold mb-2">Dynamic Pricing Options:</p>
-                  <ul className="list-disc pl-4 text-muted-foreground space-y-2 mb-4">
-                    <li><strong>Option A (Flat Fee):</strong> ${expertPricing.flat}</li>
-                    <li><strong>Option B (Equity Split):</strong> ${expertPricing.equity} + 10% Equity <span className="text-xs opacity-70">(for early-stage)</span></li>
+                  <p className="font-semibold mb-2 text-foreground">Dynamic Pricing Options:</p>
+                  <ul className="list-disc pl-4 text-muted-foreground space-y-2 mb-4 marker:text-indigo-400">
+                    <li><strong className="text-foreground">Option A (Flat Fee):</strong> ${expertPricing.flat}</li>
+                    <li><strong className="text-foreground">Option B (Equity Split):</strong> ${expertPricing.equity} + 10% Equity <span className="text-xs opacity-70">(for early-stage)</span></li>
                   </ul>
-                  <p className="font-semibold mb-1">What you get:</p>
-                  <ul className="list-disc pl-4 text-muted-foreground space-y-1">
+                  <p className="font-semibold mb-1 text-foreground">What you get:</p>
+                  <ul className="list-disc pl-4 text-muted-foreground space-y-1 marker:text-emerald-500">
                     <li>Full review of your AI-generated business plan</li>
                     <li>Competitor analysis by a real human</li>
                     <li>30-minute strategy call</li>
@@ -949,13 +987,106 @@ export default function App() {
             <Button 
               onClick={handleExpertRequest} 
               disabled={selectedOptions.size === 0}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white"
+              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-md text-base h-11"
             >
               Request Review & Payment Link
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Feedback & Community Dialog */}
+      <Dialog open={showFeedbackDialog} onOpenChange={setShowFeedbackDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <LifeBuoy className="w-5 h-5 text-indigo-500" />
+              Community & Feedback
+            </DialogTitle>
+            <DialogDescription>
+              Help us improve Foundeck or join our WhatsApp community to connect with other founders.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-6">
+            
+            {/* WhatsApp Link / Community Section */}
+            <a 
+              href="https://whatsapp.com/channel/0029VbC9GQK1SWsvjgBy291t" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center p-4 border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-900/10 rounded-xl hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors group"
+            >
+              <div className="bg-emerald-500/10 p-2 rounded-lg mr-4">
+                <MessageCircle className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-semibold text-emerald-900 dark:text-emerald-200 group-hover:text-emerald-700 transition-colors">Join our WhatsApp Channel</h4>
+                <p className="text-xs text-emerald-600/70 dark:text-emerald-300/70">Connect, share ideas, and get support.</p>
+              </div>
+              <ExternalLink className="w-4 h-4 text-emerald-400 group-hover:text-emerald-600 transition-colors" />
+            </a>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border/60" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">Or send direct feedback</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleFeedbackSubmit} className="space-y-4">
+              <div className="grid grid-cols-3 gap-2">
+                <Button 
+                  type="button" 
+                  variant={feedbackType === 'feature' ? 'default' : 'outline'}
+                  onClick={() => setFeedbackType('feature')}
+                  className="h-9 text-xs"
+                >
+                  Feature Idea
+                </Button>
+                <Button 
+                  type="button" 
+                  variant={feedbackType === 'bug' ? 'destructive' : 'outline'}
+                  onClick={() => setFeedbackType('bug')}
+                  className="h-9 text-xs"
+                >
+                  Report Bug
+                </Button>
+                <Button 
+                  type="button" 
+                  variant={feedbackType === 'help' ? 'secondary' : 'outline'}
+                  onClick={() => setFeedbackType('help')}
+                  className="h-9 text-xs"
+                >
+                  Need Help
+                </Button>
+              </div>
+              <div className="space-y-2">
+                <textarea 
+                  className="w-full min-h-[100px] p-3 rounded-lg border border-input bg-transparent text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                  placeholder="Tell us what's on your mind... (We read everything!)"
+                  value={feedbackMessage}
+                  onChange={(e) => setFeedbackMessage(e.target.value)}
+                  required
+                />
+              </div>
+              <Button type="submit" disabled={isSubmittingFeedback || !feedbackMessage.trim()} className="w-full">
+                {isSubmittingFeedback ? "Sending..." : "Send to Founder"}
+              </Button>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Floating Action Button for Mobile Feedback */}
+      <Button 
+        size="icon" 
+        onClick={() => setShowFeedbackDialog(true)} 
+        className="md:hidden fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-xl shadow-indigo-600/20 bg-indigo-600 hover:bg-indigo-700 text-white z-40"
+      >
+        <MessageSquarePlus className="w-6 h-6" />
+      </Button>
 
     </div>
   );
