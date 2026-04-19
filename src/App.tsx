@@ -792,7 +792,7 @@ export default function App() {
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
-                                handleAddCustomOption(category.id);
+                                handleAddCustomOption(category.id, category.isPremium ? 2 : 5);
                               }
                             }}
                           />
