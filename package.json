@@ -11,8 +11,9 @@
     "lint": "tsc --noEmit"
   },
   "overrides": {
-    "react-paystack": 
-      "react": "$react"
+    "react-paystack": {
+      "react": "$react",
+      "react-dom": "$react-dom"
     }
   },
   "dependencies": {
