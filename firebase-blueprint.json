@@ -21,6 +21,19 @@
         }
       },
       "required": ["email", "isPro", "createdAt"]
+    },
+    "PromptHistory": {
+      "title": "Prompt History",
+      "description": "User's saved prompt history",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "niche": { "type": "string" },
+        "audience": { "type": "string" },
+        "promptText": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "niche", "audience", "promptText", "createdAt"]
     }
   },
   "firestore": {
@@ -29,6 +42,12 @@
         "$ref": "#/entities/User"
       },
       "description": "Stores user profiles and their pro status."
+    },
+    "/users/{userId}/prompts/{promptId}": {
+      "schema": {
+        "$ref": "#/entities/PromptHistory"
+      },
+      "description": "Stores the generated prompts saved by the user."
     }
   }
 }

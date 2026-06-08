@@ -55,6 +55,15 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidPromptHistory(data, userId) {
+      return hasOnlyAllowedFields(['userId', 'niche', 'audience', 'promptText', 'createdAt']) &&
+             data.userId == userId &&
+             data.niche is string &&
+             data.audience is string &&
+             data.promptText is string && data.promptText.size() > 0 && data.promptText.size() <= 100000 &&
+             data.createdAt is timestamp;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       
@@ -67,6 +76,13 @@ service cloud.firestore {
                     request.resource.data.createdAt == resource.data.createdAt &&
                     request.resource.data.email == resource.data.email &&
                     request.resource.data.isPro == resource.data.isPro;
+                    
+      match /prompts/{promptId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidPromptHistory(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+        allow update: if false; // history shouldn't change
+      }
     }
 
     match /feedback/{feedbackId} {

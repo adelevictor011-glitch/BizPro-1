@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Joyride, CallBackProps, STATUS } from "react-joyride";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,9 +16,11 @@ import {
 } from "lucide-react";
 
 import { auth, db, googleProvider } from "./firebase";
-import { signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, addDoc } from "firebase/firestore";
+import { signInWithPopup, signOut, onAuthStateChanged, updateProfile, User } from "firebase/auth";
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, collection, addDoc, query, orderBy, onSnapshot, getDocs, limit, startAfter, QueryDocumentSnapshot } from "firebase/firestore";
 import { usePaystackPayment } from "react-paystack";
+
+import { History, Save, Share2, Loader2, Trash2, Lightbulb, PlayCircle, Download, Settings2, Search } from "lucide-react";
 
 // Base categories before randomization
 const BASE_CATEGORIES = [
@@ -206,11 +209,85 @@ const AFFILIATES = [
   { name: "Hostinger", desc: "Affordable Web Hosting", link: "#hostinger-affiliate" }
 ];
 
+const EXAMPLES = [
+  {
+    title: "E-commerce Startup",
+    niche: "Direct-to-consumer organic supplements",
+    audience: "Health-conscious millennials",
+    selections: ["p1", "m1", "m3"]
+  },
+  {
+    title: "SaaS for Developers",
+    niche: "AI-powered code review tool",
+    audience: "Engineering managers and CTOs",
+    selections: ["t3", "s2", "o2"]
+  },
+  {
+    title: "Local Service Business",
+    niche: "Premium mobile car detailing",
+    audience: "High-income suburban homeowners",
+    selections: ["m2", "f1", "o1"]
+  }
+];
+
 export default function App() {
   const [niche, setNiche] = useState("");
   const [audience, setAudience] = useState("");
   const [email, setEmail] = useState("");
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set());
+  const [promptStyle, setPromptStyle] = useState("Standard");
+  const [generationMode, setGenerationMode] = useState<"Draft" | "Final">("Final");
+  
+  // Tour State
+  const [{ runTour, tourSteps }, setTourState] = useState({
+    runTour: false,
+    tourSteps: [
+      {
+        target: '.tour-step-1',
+        content: 'Welcome to Foundeck! Start by defining your core business niche and idea.',
+        disableBeacon: true,
+      },
+      {
+        target: '.tour-step-2',
+        content: 'Select the specific deliverables you need the AI to generate for your business.',
+      },
+      {
+        target: '.tour-step-3',
+        content: 'Adjust the prompt generation strategy (A/B testing) to change the tone and structure of your output.',
+      },
+      {
+        target: '.tour-step-4',
+        content: 'Review, copy, or share your newly generated master prompt.',
+      },
+      {
+        target: '.tour-step-5',
+        content: 'Access your previously saved prompts or export them.',
+      },
+      {
+        target: '.tour-step-6',
+        content: 'Need more power? Unlock Pro for unlimited options and advanced features.',
+      }
+    ]
+  });
+
+  const handleJoyrideCallback = (data: any) => {
+    const { status } = data;
+    const finishedStatuses: string[] = [STATUS.FINISHED, STATUS.SKIPPED];
+    if (finishedStatuses.includes(status)) {
+      setTourState((prev) => ({ ...prev, runTour: false }));
+      localStorage.setItem('foundeckTourCompleted', 'true');
+    }
+  };
+
+  useEffect(() => {
+    const hasCompletedTour = localStorage.getItem('foundeckTourCompleted');
+    if (!hasCompletedTour) {
+      // Small delay to let UI elements render
+      setTimeout(() => {
+        setTourState(prev => ({ ...prev, runTour: true }));
+      }, 1000);
+    }
+  }, []);
   
   // Dynamic categories (shuffled on load)
   const [categories, setCategories] = useState(BASE_CATEGORIES);
@@ -235,6 +312,51 @@ export default function App() {
   const [hasUnlockedPremium, setHasUnlockedPremium] = useState(false);
   const [hasProvidedEmail, setHasProvidedEmail] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+
+  // History state
+  const [showHistoryDialog, setShowHistoryDialog] = useState(false);
+  const [historyPrompts, setHistoryPrompts] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+  const [historyLastDoc, setHistoryLastDoc] = useState<QueryDocumentSnapshot | null>(null);
+  const [hasMoreHistory, setHasMoreHistory] = useState(true);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
+  const [historySortOption, setHistorySortOption] = useState<string>("date_desc");
+  const [historyTab, setHistoryTab] = useState<"all" | "favorites">("all");
+  const [showAvatarDialog, setShowAvatarDialog] = useState(false);
+  const [avatarFiles, setAvatarFiles] = useState<string[]>([
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Jasper",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Jocelyn",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Brian",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Lucy",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Sam",
+    "https://api.dicebear.com/7.x/avataaars/svg?seed=Mia"
+  ]);
+
+  const toggleFavorite = async (promptId: string, currentFav: boolean) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, "users", user.uid, "prompts", promptId), { isFavorite: !currentFav });
+      setHistoryPrompts(prev => prev.map(p => p.id === promptId ? { ...p, isFavorite: !currentFav } : p));
+      toast.success(currentFav ? "Removed from favorites" : "Added to favorites");
+    } catch (e) {
+      toast.error("Failed to update favorite status." + e);
+    }
+  };
+
+  // Generation state
+  const [displayPrompt, setDisplayPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Complexity limit state
+  const [showComplexityDialog, setShowComplexityDialog] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<Set<string> | null>(null);
+
+  // Deletion state
+  const [deleteConfDialog, setDeleteConfDialog] = useState<{isOpen: boolean, type: 'single' | 'all', id?: string}>({isOpen: false, type: 'single'});
 
   // Paystack Configuration
   const paystackConfig = {
@@ -320,6 +442,24 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const n = params.get('niche');
+    const a = params.get('audience');
+    const o = params.get('options');
+    const s = params.get('style');
+
+    if (n) setNiche(n);
+    if (a) setAudience(a);
+    if (o) setSelectedOptions(new Set(o.split(',')));
+    if (s) setPromptStyle(s);
+
+    // Clear URL to prevent stale shares if they reload or navigate
+    if (n || a || o || s) {
+       window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   // Shuffle options on mount to prevent copying
   useEffect(() => {
     const shuffled = BASE_CATEGORIES.map(cat => ({
@@ -329,85 +469,69 @@ export default function App() {
     setCategories(shuffled);
   }, []);
 
-  const handleToggleOption = (id: string, isLocked: boolean, categoryId: string, maxSelect: number) => {
+  const applySelectionChange = (newSet: Set<string>) => {
+    // 1. Enforce Free tier global limit (max 9)
+    if (!hasUnlockedPremium && newSet.size > 9) {
+      setShowPremiumDialog(true);
+      toast.error("Free tier is limited to 9 total selections. Unlock Pro for unlimited access.");
+      return;
+    }
+
+    // 2. Master Prompt Warning (15 or more selections)
+    if (newSet.size >= 15 && selectedOptions.size < 15) {
+      setPendingSelection(newSet);
+      setShowComplexityDialog(true);
+      return;
+    }
+
+    setSelectedOptions(newSet);
+  };
+
+  const handleToggleOption = (id: string, isLocked: boolean, categoryId: string) => {
     if (isLocked) {
       setShowPremiumDialog(true);
       return;
     }
 
-    setSelectedOptions(prev => {
-      const newSet = new Set(prev);
-      
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        // Check limits
-        const categoryOpts = categories.find(c => c.id === categoryId)?.options || [];
-        const customOpts = customOptions[categoryId] || [];
-        const allCatOptIds = [...categoryOpts, ...customOpts].map(o => o.id);
-        
-        let currentSelectedCount = 0;
-        newSet.forEach(optId => {
-          if (allCatOptIds.includes(optId)) currentSelectedCount++;
-        });
-
-        if (currentSelectedCount >= maxSelect) {
-          toast.error(`You can only select up to ${maxSelect} items in this category.`);
-          return prev;
-        }
-        
-        newSet.add(id);
-      }
-      return newSet;
-    });
+    const newSet = new Set(selectedOptions);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    applySelectionChange(newSet);
   };
 
   const handleSelectAll = (categoryOptions: {id: string}[], categoryId: string, isPremiumCategory: boolean) => {
-    setSelectedOptions(prev => {
-      const newSet = new Set(prev);
-      
-      // Only select unlocked options
-      const unlockedOptions = categoryOptions.filter((_, index) => {
-        const isLocked = isPremiumCategory && !hasUnlockedPremium && index >= 3;
-        return !isLocked;
-      });
-
-      // Include custom options in the "Select All" logic
-      const customOpts = customOptions[categoryId] || [];
-      const allAvailable = [...unlockedOptions, ...customOpts];
-
-      const allSelected = allAvailable.length > 0 && allAvailable.every(opt => newSet.has(opt.id));
-      
-      allAvailable.forEach(opt => {
-        if (allSelected) {
-          newSet.delete(opt.id);
-        } else {
-          newSet.add(opt.id);
-        }
-      });
-      return newSet;
+    const newSet = new Set(selectedOptions);
+    
+    // Only select unlocked options
+    const unlockedOptions = categoryOptions.filter((_, index) => {
+      const isLocked = isPremiumCategory && !hasUnlockedPremium && index >= 3;
+      return !isLocked;
     });
+
+    // Include custom options in the "Select All" logic
+    const customOpts = customOptions[categoryId] || [];
+    const allAvailable = [...unlockedOptions, ...customOpts];
+
+    const allSelected = allAvailable.length > 0 && allAvailable.every(opt => newSet.has(opt.id));
+    
+    allAvailable.forEach(opt => {
+      if (allSelected) {
+        newSet.delete(opt.id);
+      } else {
+        newSet.add(opt.id);
+      }
+    });
+    
+    applySelectionChange(newSet);
   };
 
-  const handleAddCustomOption = (categoryId: string, maxSelect: number) => {
+  const handleAddCustomOption = (categoryId: string) => {
     const text = customInputs[categoryId];
     if (!text || !text.trim()) return;
     
-    // Check limits before adding and selecting
-    const categoryOpts = categories.find(c => c.id === categoryId)?.options || [];
-    const customOpts = customOptions[categoryId] || [];
-    const allCatOptIds = [...categoryOpts, ...customOpts].map(o => o.id);
-    
-    let currentSelectedCount = 0;
-    selectedOptions.forEach(optId => {
-      if (allCatOptIds.includes(optId)) currentSelectedCount++;
-    });
-
-    if (currentSelectedCount >= maxSelect) {
-      toast.error(`You can only select up to ${maxSelect} items in this category.`);
-      return;
-    }
-
     const newOpt = { id: `custom-${Date.now()}-${Math.random()}`, label: text.trim() };
     
     setCustomOptions(prev => ({
@@ -417,16 +541,49 @@ export default function App() {
     
     setCustomInputs(prev => ({ ...prev, [categoryId]: "" }));
     
-    // Automatically select the newly added option
-    setSelectedOptions(prev => new Set(prev).add(newOpt.id));
+    const newSet = new Set(selectedOptions);
+    newSet.add(newOpt.id);
+    applySelectionChange(newSet);
   };
 
   const generatePrompt = useMemo(() => {
     if (!niche || !audience) return "Please enter your business niche and target audience first.";
     if (selectedOptions.size === 0) return "Please select at least one aspect of your business to generate a prompt.";
 
+    const styleMap: Record<string, string> = {
+      "Standard": "Maintain a professional, clear, and balanced tone.",
+      "Creative": "Use out-of-the-box thinking, be highly creative, innovative, and propose unique approaches. Challenge industry norms.",
+      "Concise": "Be extremely brief, direct to the point, and eliminate any fluff. Use bullet points heavily and synthesize strictly.",
+      "Detailed": "Provide incredibly comprehensive and thorough details, deep-dive analysis, step-by-step guidance, and exhaustive reasoning."
+    };
+
+    if (generationMode === "Draft") {
+      let draft = `### DRAFT PROMPT TEMPLATE\n> *Review and customize the bracketed [ ] sections below before copying to your AI tool.*\n\n`;
+      draft += `Act as an expert startup founder, business consultant, and strategist. I am building a new business in the **[Your specific sub-niche, e.g., ${niche}]** space, specifically targeting **[Your exact customer persona, e.g., ${audience}]**.\n\n`;
+      draft += `**Key Differentiators:**\n- [Insert what makes you unique 1]\n- [Insert what makes you unique 2]\n\n`;
+      draft += `**Current Challenges:**\n- [Insert your biggest hurdle here]\n\n`;
+      draft += `### STRATEGY & TONE\n`;
+      draft += `${styleMap[promptStyle] || styleMap["Standard"]} [Adjust tone instructions here if needed]\n\n`;
+      
+      draft += `### REQUIRED SECTIONS TO COVER\n\nPlease help me develop the following areas:\n\n`;
+      categories.forEach(category => {
+        const allCatOptions = [...category.options, ...(customOptions[category.id] || [])];
+        const selectedInCategory = allCatOptions.filter(opt => selectedOptions.has(opt.id));
+        if (selectedInCategory.length > 0) {
+          draft += `#### ${category.title}\n`;
+          selectedInCategory.forEach(opt => { draft += `- ${opt.label}: [Add specific context or requirements for this]\n`; });
+          draft += `\n`;
+        }
+      });
+      draft += `Please ask me 3 to 5 clarifying questions before generating the full plan.`;
+      return draft;
+    }
+
     let prompt = `Act as an expert startup founder, business consultant, and strategist. I am building a new business in the **${niche}** space, specifically targeting **${audience}**.\n\n`;
     
+    prompt += `### STRATEGY & TONE\n`;
+    prompt += `${styleMap[promptStyle] || styleMap["Standard"]}\n\n`;
+
     prompt += `### CRITICAL INSTRUCTIONS & GUARDRAILS\n`;
     prompt += `1. **Do not generate the entire plan at once.**\n`;
     prompt += `2. **Initiate Clarifications:** Start by asking me 3 to 5 highly specific, clarifying questions about my business model, budget, and unique value proposition.\n`;
@@ -453,9 +610,18 @@ export default function App() {
     prompt += `Format your response clearly using markdown headers, bullet points, and bold text for emphasis. Remember: Start ONLY with your clarifying questions.`;
 
     return prompt;
-  }, [niche, audience, selectedOptions, categories, customOptions]);
+  }, [niche, audience, selectedOptions, categories, customOptions, promptStyle, generationMode]);
 
   const generatedPrompt = generatePrompt;
+
+  useEffect(() => {
+    setIsGenerating(true);
+    const timer = setTimeout(() => {
+      setDisplayPrompt(generatedPrompt);
+      setIsGenerating(false);
+    }, 400); // simulate thinking
+    return () => clearTimeout(timer);
+  }, [generatedPrompt]);
 
   const handleCopyRequest = () => {
     if (!niche || !audience || selectedOptions.size === 0) {
@@ -472,9 +638,36 @@ export default function App() {
   };
 
   const executeCopy = () => {
-    navigator.clipboard.writeText(generatedPrompt);
+    navigator.clipboard.writeText(displayPrompt);
     toast.success("Prompt copied to clipboard!");
     setShowEmailDialog(false);
+  };
+
+  const handleShare = async () => {
+    if (!niche || !audience || selectedOptions.size === 0) {
+      toast.error("Please fill out the details and select options first.");
+      return;
+    }
+
+    const shareData = {
+      title: 'Foundeck | My Master Business Prompt',
+      text: `I just built an elite AI business strategy prompt for my startup using Foundeck! Check it out:\n\n${displayPrompt.substring(0, 150)}...\n\nBuild yours here:`,
+      url: window.location.href,
+    };
+
+    if (navigator.share && /mobile|android|iphone|ipad/i.test(navigator.userAgent)) {
+      try {
+        await navigator.share(shareData);
+        toast.success("Shared successfully!");
+      } catch (err) {
+        console.error("Error sharing:", err);
+      }
+    } else {
+      // Fallback to Twitter/X compose if Web Share isn't supported or on Desktop
+      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareData.text)}&url=${encodeURIComponent(shareData.url || 'https://foundeck.vercel.app')}`;
+      window.open(twitterUrl, '_blank');
+      toast.success("Opened Twitter to share");
+    }
   };
 
   const handleEmailSubmit = (e: React.FormEvent) => {
@@ -488,7 +681,189 @@ export default function App() {
     executeCopy();
   };
 
+  const handleSavePrompt = async () => {
+    if (!niche || !audience || selectedOptions.size === 0) {
+      toast.error("Please fill out the details and select options first.");
+      return;
+    }
+    if (!user) {
+      toast.error("Please log in to save prompts to your history.");
+      return;
+    }
+
+    setIsSavingPrompt(true);
+    try {
+      await addDoc(collection(db, "users", user.uid, "prompts"), {
+        userId: user.uid,
+        niche: niche,
+        audience: audience,
+        promptText: displayPrompt,
+        options: Array.from(selectedOptions),
+        style: promptStyle,
+        createdAt: serverTimestamp()
+      });
+      toast.success("Prompt saved to history!");
+    } catch (error) {
+      console.error("Error saving prompt:", error);
+      toast.error("Failed to save prompt.");
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
+  const exportHistory = () => {
+    if (historyPrompts.length === 0) return;
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(historyPrompts, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href",     dataStr);
+    downloadAnchorNode.setAttribute("download", "foundeck_history_export.json");
+    document.body.appendChild(downloadAnchorNode); // required for firefox
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    toast.success("JSON exported successfully!");
+  };
+
+  const exportHistoryCSV = () => {
+    if (historyPrompts.length === 0) return;
+    const headers = ["ID", "CreatedAt", "Niche", "Audience", "IsFavorite", "PromptText"];
+    const rows = historyPrompts.map(p => {
+      const date = p.createdAt?.toDate ? p.createdAt.toDate().toISOString() : "";
+      const text = p.promptText ? p.promptText.replace(/"/g, '""') : "";
+      return `"${p.id}","${date}","${p.niche}","${p.audience}","${!!p.isFavorite}","${text}"`;
+    });
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "foundeck_history_export.csv");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    toast.success("CSV exported successfully!");
+  };
+
+  const loadHistory = async (reset = false) => {
+    if (!user) return;
+    if (reset) {
+      setIsLoadingHistory(true);
+      setHistoryPrompts([]);
+      setHistoryLastDoc(null);
+      setHasMoreHistory(true);
+    } else {
+      if (!hasMoreHistory || isLoadingHistory || isLoadingMoreHistory) return;
+      setIsLoadingMoreHistory(true);
+    }
+
+    try {
+      let sortField = "createdAt";
+      let sortDir: "asc" | "desc" = "desc";
+      if (historySortOption === "date_asc") { sortDir = "asc"; }
+      else if (historySortOption === "niche_asc") { sortField = "niche"; sortDir = "asc"; }
+      else if (historySortOption === "niche_desc") { sortField = "niche"; sortDir = "desc"; }
+      else if (historySortOption === "audience_asc") { sortField = "audience"; sortDir = "asc"; }
+      else if (historySortOption === "audience_desc") { sortField = "audience"; sortDir = "desc"; }
+      
+      let q = query(collection(db, "users", user.uid, "prompts"), orderBy(sortField, sortDir), limit(15));
+      if (!reset && historyLastDoc) {
+        q = query(collection(db, "users", user.uid, "prompts"), orderBy(sortField, sortDir), startAfter(historyLastDoc), limit(15));
+      }
+      
+      const snapshot = await getDocs(q);
+      const historyData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      if (reset) {
+         setHistoryPrompts(historyData);
+      } else {
+         setHistoryPrompts(prev => [...prev, ...historyData]);
+      }
+      
+      if (snapshot.docs.length > 0) {
+        setHistoryLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      } else {
+        setHasMoreHistory(false);
+      }
+      if (snapshot.docs.length < 15) {
+         setHasMoreHistory(false);
+      }
+    } catch (error) {
+      console.error("Error loading history:", error);
+      toast.error("Failed to load prompt history.");
+    } finally {
+      setIsLoadingHistory(false);
+      setIsLoadingMoreHistory(false);
+    }
+  };
+
+  const observerTarget = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && hasMoreHistory && !isLoadingHistory && !isLoadingMoreHistory) {
+          loadHistory(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    if (observerTarget.current) {
+      observer.observe(observerTarget.current);
+    }
+
+    return () => {
+      if (observerTarget.current) {
+        observer.unobserve(observerTarget.current);
+      }
+    };
+  }, [hasMoreHistory, isLoadingHistory, isLoadingMoreHistory, observerTarget.current]);
+
+  const confirmDeletePrompt = (promptId: string) => {
+    setDeleteConfDialog({ isOpen: true, type: 'single', id: promptId });
+  };
+
+  const confirmClearHistory = () => {
+    setDeleteConfDialog({ isOpen: true, type: 'all' });
+  };
+
+  const deletePrompt = async (promptId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "users", user.uid, "prompts", promptId));
+      setHistoryPrompts(prev => prev.filter(p => p.id !== promptId));
+      toast.success("Prompt deleted.");
+    } catch (error) {
+      console.error("Error deleting prompt:", error);
+      toast.error("Failed to delete prompt.");
+    }
+  };
+
+  const clearHistory = async () => {
+    if (!user || historyPrompts.length === 0) return;
+    setIsLoadingHistory(true);
+    try {
+      // In a real app we might batch this or do it via edge function, 
+      // but for <100 items running a loop of deletes is fine client side.
+      const promises = historyPrompts.map(p => deleteDoc(doc(db, "users", user.uid, "prompts", p.id)));
+      await Promise.all(promises);
+      setHistoryPrompts([]);
+      toast.success("Prompt history cleared.");
+    } catch (error) {
+      console.error("Error clearing history:", error);
+      toast.error("Failed to clear prompt history.");
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showHistoryDialog) {
+      loadHistory(true);
+      setHistorySearchQuery("");
+    }
+  }, [showHistoryDialog, user, historySortOption]);
+
   const handleUnlockPremium = async () => {
+
     if (!user) {
       toast.error("Please log in first to unlock Pro.");
       handleLogin();
@@ -594,6 +969,19 @@ export default function App() {
 
   return (
     <div className="min-h-screen relative bg-slate-50 dark:bg-slate-950 text-foreground selection:bg-indigo-500/30 pb-24 font-sans isolation-auto transition-colors duration-300">
+      <Joyride
+        steps={tourSteps}
+        run={runTour}
+        continuous={true}
+        showProgress={true}
+        showSkipButton={true}
+        callback={handleJoyrideCallback}
+        styles={{
+          options: {
+            primaryColor: '#4f46e5',
+          }
+        }}
+      />
       {/* Subtle modern background radial gradient for depth */}
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-100/60 via-transparent to-transparent dark:from-indigo-900/20 dark:via-background dark:to-background pointer-events-none"></div>
 
@@ -607,26 +995,52 @@ export default function App() {
             <span className="font-bold text-xl tracking-tight hidden sm:inline-block">Foundeck</span>
           </div>
           <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium">
+            <Button variant="ghost" size="sm" onClick={() => setTourState(prev => ({...prev, runTour: true}))} className="text-indigo-600 hover:text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100">
+              <PlayCircle className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Tour</span>
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowFeedbackDialog(true)} className="hidden md:flex text-muted-foreground hover:text-foreground">
               <LifeBuoy className="w-4 h-4 mr-2" />
               Community & Help
             </Button>
             
             {!hasUnlockedPremium && (
-              <Button variant="outline" size="sm" onClick={() => setShowPremiumDialog(true)} className="hidden sm:flex border-amber-500/50 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 bg-amber-50 dark:bg-amber-500/10 shadow-sm">
-                <Lock className="w-3.5 h-3.5 mr-2" />
-                Unlock Pro ($15)
+              <Button variant="outline" size="sm" onClick={() => setShowPremiumDialog(true)} className="flex border-amber-500/50 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 bg-amber-50 dark:bg-amber-500/10 shadow-sm tour-step-6">
+                <Lock className="w-3.5 h-3.5 sm:mr-2" />
+                <span className="hidden sm:inline">Unlock Pro ($15)</span>
+                <span className="inline sm:hidden">Pro</span>
               </Button>
             )}
             <Button size="sm" onClick={() => setShowExpertDialog(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20">
               <Star className="w-3.5 h-3.5 sm:mr-2" />
               <span className="hidden sm:inline">Expert Review</span>
             </Button>
-            {user ? (
-              <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground hover:text-foreground">
-                <LogOut className="w-4 h-4 sm:mr-2" />
-                <span className="hidden sm:inline">Logout</span>
+            {user && (
+              <Button variant="ghost" size="sm" onClick={() => setShowHistoryDialog(true)} className="text-muted-foreground hover:text-foreground tour-step-5">
+                <History className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">History</span>
               </Button>
+            )}
+            {user ? (
+              <div className="flex items-center gap-1 sm:gap-2">
+                <button 
+                  onClick={() => setShowAvatarDialog(true)}
+                  className="rounded-full overflow-hidden transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ring-offset-background"
+                  title="Change Avatar"
+                >
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="User" className="w-7 h-7 rounded-full border border-border" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-900 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-700 dark:text-indigo-300 font-bold text-xs">
+                      {user.email?.charAt(0).toUpperCase() || 'U'}
+                    </div>
+                  )}
+                </button>
+                <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground hover:text-foreground">
+                  <LogOut className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Logout</span>
+                </Button>
+              </div>
             ) : (
               <Button variant="ghost" size="sm" onClick={handleLogin} className="text-muted-foreground hover:text-foreground">
                 <LogIn className="w-4 h-4 sm:mr-2" />
@@ -638,7 +1052,7 @@ export default function App() {
       </header>
 
       <main className="container mx-auto px-4 lg:px-8 py-10 md:py-16 max-w-7xl animate-in fade-in duration-500 slide-in-from-bottom-6">
-        <div className="text-center space-y-4 mb-16">
+        <div className="text-center space-y-4 mb-12">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-balance text-slate-900 dark:text-slate-50">
             Build Your Ultimate <span className="text-indigo-600 dark:text-indigo-400">Business Prompt</span>
           </h1>
@@ -647,11 +1061,44 @@ export default function App() {
           </p>
         </div>
 
+        {/* Examples Section */}
+        <div className="mb-16">
+          <div className="flex items-center justify-center gap-2 mb-6">
+            <Lightbulb className="w-5 h-5 text-amber-500" />
+            <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200">Inspiration: Try an Example</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {EXAMPLES.map((example, idx) => (
+              <Card 
+                key={idx} 
+                className="cursor-pointer hover:border-indigo-500/50 hover:shadow-md transition-all group active:scale-[0.98] bg-card/50"
+                onClick={() => {
+                  setNiche(example.niche);
+                  setAudience(example.audience);
+                  setSelectedOptions(new Set(example.selections));
+                  toast.success(`Loaded example: ${example.title}`);
+                  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                }}
+              >
+                <CardHeader className="py-4">
+                  <CardTitle className="text-base flex items-center justify-between group-hover:text-indigo-600 transition-colors">
+                    {example.title}
+                    <PlayCircle className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-4 pt-0">
+                  <p className="text-sm text-muted-foreground line-clamp-2">Niche: {example.niche}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+
         <div className="grid lg:grid-cols-12 gap-8 items-start">
           
           {/* Left Column: Inputs & Checkboxes */}
           <div className="lg:col-span-7 space-y-8">
-            <Card className="border-border/50 shadow-md transition-all hover:shadow-lg bg-card/80 backdrop-blur-sm">
+            <Card className="border-border/50 shadow-md transition-all hover:shadow-lg bg-card/80 backdrop-blur-sm tour-step-1">
               <CardHeader className="bg-muted/10 border-b border-border/40">
                 <CardTitle className="flex items-center gap-2">
                   <Target className="w-5 h-5 text-primary" />
@@ -683,7 +1130,56 @@ export default function App() {
               </CardContent>
             </Card>
 
-            <div className="space-y-4">
+            <Card className="border-border/50 shadow-md transition-all hover:shadow-lg bg-card/80 backdrop-blur-sm tour-step-3">
+              <CardHeader className="bg-muted/10 border-b border-border/40 py-4">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Settings2 className="w-5 h-5 text-primary" />
+                  Prompt Settings
+                </CardTitle>
+                <CardDescription>Select the tone, output structure, and mode for your AI generation.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 space-y-4">
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-2 block uppercase tracking-wider font-semibold">Prompt Tone (A/B Test)</Label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {["Standard", "Creative", "Concise", "Detailed"].map((style) => (
+                      <Button
+                        key={style}
+                        variant={promptStyle === style ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setPromptStyle(style)}
+                        className="w-full font-medium transition-all"
+                      >
+                        {style}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-2 block uppercase tracking-wider font-semibold">Generation Mode</Label>
+                  <div className="flex gap-3">
+                    <Button
+                      variant={generationMode === "Final" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setGenerationMode("Final")}
+                      className="font-medium transition-all flex-1"
+                    >
+                      Final (Ready to send)
+                    </Button>
+                    <Button
+                      variant={generationMode === "Draft" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setGenerationMode("Draft")}
+                      className="font-medium transition-all flex-1"
+                    >
+                      Draft (Structured template to refine)
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="space-y-4 tour-step-2">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold tracking-tight">Select Requirements</h2>
                 <Badge variant="outline">{selectedOptions.size} Selected</Badge>
@@ -715,7 +1211,7 @@ export default function App() {
                           </CardTitle>
                         </div>
                         <Badge variant="secondary" className="text-xs font-normal">
-                          {currentSelectedCount} / {category.isPremium ? 2 : 5} max
+                          {currentSelectedCount} selected
                         </Badge>
                       </CardHeader>
                       <CardContent className="p-4 flex-grow">
@@ -723,16 +1219,16 @@ export default function App() {
                           {/* Default Options */}
                           {category.options.map((opt, index) => {
                             const isLocked = category.isPremium && !hasUnlockedPremium && index >= 3;
-                            const isMaxReached = currentSelectedCount >= (category.isPremium ? 2 : 5);
                             const isSelected = selectedOptions.has(opt.id);
-                            const isDisabled = isLocked || (isMaxReached && !isSelected);
+                            const hitFreeLimit = !hasUnlockedPremium && selectedOptions.size >= 9;
+                            const isDisabled = isLocked || (hitFreeLimit && !isSelected);
                             
                             return (
                               <div key={opt.id} className={`flex items-start space-x-3 ${isLocked ? 'opacity-50' : (isDisabled ? 'opacity-40' : '')}`}>
                                 <Checkbox 
                                   id={opt.id} 
                                   checked={isSelected}
-                                  onCheckedChange={() => handleToggleOption(opt.id, isLocked, category.id, category.isPremium ? 2 : 5)}
+                                  onCheckedChange={() => handleToggleOption(opt.id, isLocked, category.id)}
                                   disabled={isDisabled}
                                   className={`mt-0.5 ${isLocked ? 'border-amber-500/50 data-[state=checked]:bg-amber-500' : ''}`}
                                 />
@@ -740,11 +1236,9 @@ export default function App() {
                                   htmlFor={opt.id} 
                                   className={`text-sm font-normal leading-snug cursor-pointer flex items-center gap-1.5 ${isDisabled ? 'text-muted-foreground select-none cursor-not-allowed' : ''}`}
                                   onClick={(e) => {
-                                    if (isLocked) {
+                                    if (isLocked || (hitFreeLimit && !isSelected)) {
                                       e.preventDefault();
-                                      setShowPremiumDialog(true);
-                                    } else if (isDisabled) {
-                                      e.preventDefault();
+                                      if (isLocked || hitFreeLimit) setShowPremiumDialog(true);
                                     }
                                   }}
                                 >
@@ -762,16 +1256,16 @@ export default function App() {
 
                           {/* Custom Options */}
                           {customOpts.map(opt => {
-                            const isMaxReached = currentSelectedCount >= (category.isPremium ? 2 : 5);
                             const isSelected = selectedOptions.has(opt.id);
-                            const isDisabled = isMaxReached && !isSelected;
+                            const hitFreeLimit = !hasUnlockedPremium && selectedOptions.size >= 9;
+                            const isDisabled = hitFreeLimit && !isSelected;
 
                             return (
                             <div key={opt.id} className={`flex items-start space-x-3 ${isDisabled ? 'opacity-40' : ''}`}>
                               <Checkbox 
                                 id={opt.id} 
                                 checked={isSelected}
-                                onCheckedChange={() => handleToggleOption(opt.id, false, category.id, category.isPremium ? 2 : 5)}
+                                onCheckedChange={() => handleToggleOption(opt.id, false, category.id)}
                                 disabled={isDisabled}
                                 className="mt-0.5 border-primary/50"
                               />
@@ -779,7 +1273,10 @@ export default function App() {
                                 htmlFor={opt.id} 
                                 className={`text-sm font-normal leading-snug cursor-pointer ${isDisabled ? 'text-muted-foreground cursor-not-allowed' : 'text-primary/90'}`}
                                 onClick={(e) => {
-                                  if (isDisabled) e.preventDefault();
+                                  if (isDisabled) {
+                                    e.preventDefault();
+                                    setShowPremiumDialog(true);
+                                  }
                                 }}
                               >
                                 {opt.label}
@@ -801,15 +1298,17 @@ export default function App() {
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
-                                handleAddCustomOption(category.id, category.isPremium ? 2 : 5);
+                                handleAddCustomOption(category.id);
                               }
                             }}
+                            disabled={!hasUnlockedPremium && selectedOptions.size >= 9}
                           />
                           <Button 
                             size="sm" 
                             variant="secondary" 
                             className="h-8 px-2"
-                            onClick={() => handleAddCustomOption(category.id, category.isPremium ? 2 : 5)}
+                            onClick={() => handleAddCustomOption(category.id)}
+                            disabled={!hasUnlockedPremium && selectedOptions.size >= 9}
                           >
                             <Plus className="w-4 h-4" />
                           </Button>
@@ -825,32 +1324,93 @@ export default function App() {
           {/* Right Column: Generated Prompt & Affiliates */}
           <div className="lg:col-span-5 space-y-6">
             <div className="sticky top-24 space-y-6">
-              <Card className="border-primary/20 shadow-xl shadow-indigo-600/5 bg-gradient-to-b from-card to-card/50 backdrop-blur-md">
+              <Card className="border-primary/20 shadow-xl shadow-indigo-600/5 bg-gradient-to-b from-card to-card/50 backdrop-blur-md tour-step-4">
                 <CardHeader className="bg-primary/5 border-b border-primary/10 pb-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <CardTitle className="flex items-center gap-2">
                       <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                       Your Master Prompt
                     </CardTitle>
-                    <Button onClick={handleCopyRequest} size="sm" className="font-semibold w-full sm:w-auto shadow-sm">
-                      <Copy className="w-4 h-4 mr-2" />
-                      Copy Prompt
-                    </Button>
+                    <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
+                      <Button onClick={handleSavePrompt} size="sm" variant="secondary" className="font-semibold shadow-sm flex-1 sm:flex-none transition-all" disabled={isSavingPrompt}>
+                        {isSavingPrompt ? <Loader2 className="w-4 h-4 mr-1 sm:mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-1 sm:mr-2" />}
+                        {isSavingPrompt ? 'Saving...' : 'Save'}
+                      </Button>
+                      <Button onClick={handleCopyRequest} size="sm" className="font-semibold shadow-sm flex-1 sm:flex-none transition-all">
+                        <Copy className="w-4 h-4 mr-1 sm:mr-2" />
+                        Copy
+                      </Button>
+                      <Button onClick={handleShare} size="sm" variant="outline" className="font-semibold shadow-sm flex-1 sm:flex-none transition-all group">
+                        <Share2 className="w-4 h-4 mr-1 sm:mr-2 group-hover:text-indigo-500" />
+                        Share
+                      </Button>
+                    </div>
                   </div>
                   <CardDescription className="text-balance leading-relaxed">
                     Paste this into ChatGPT, Claude, or Gemini. It forces the AI to structure a perfect response.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-0">
-                  <ScrollArea className="h-[400px] lg:h-[500px] w-full rounded-b-xl bg-slate-100/50 dark:bg-slate-900/50">
+                  <ScrollArea className="h-[400px] lg:h-[500px] w-full rounded-b-xl bg-slate-100/50 dark:bg-slate-900/50 relative">
                     <div className="p-6">
-                      <pre className="whitespace-pre-wrap font-mono text-[13px] text-slate-700 dark:text-slate-300 leading-relaxed selection:bg-indigo-200 dark:selection:bg-indigo-900">
-                        {generatedPrompt}
-                      </pre>
+                      {isGenerating ? (
+                        <div className="flex flex-col items-center justify-center h-full space-y-4 py-16 sm:py-20 text-muted-foreground animate-pulse text-center">
+                          <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 animate-spin text-indigo-500" />
+                          <p className="text-sm sm:text-base font-medium">Synthesizing prompt modules...</p>
+                        </div>
+                      ) : (
+                        <pre className="whitespace-pre-wrap font-mono text-[13px] text-slate-700 dark:text-slate-300 leading-relaxed selection:bg-indigo-200 dark:selection:bg-indigo-900 animate-in fade-in duration-300">
+                          {displayPrompt}
+                        </pre>
+                      )}
                     </div>
                   </ScrollArea>
                 </CardContent>
               </Card>
+
+              {displayPrompt && !isGenerating && (
+                <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                  <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground uppercase tracking-wider">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    Related Strategies to Explore
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Card
+                      className="cursor-pointer hover:border-primary/50 transition-colors bg-gradient-to-br from-card to-muted/20"
+                      onClick={() => setPromptStyle(promptStyle === "Creative" ? "Detailed" : "Creative")}
+                    >
+                      <CardContent className="p-4 flex gap-3 text-sm">
+                        <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg h-fit">
+                          <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground mb-1">Change the Tone</p>
+                          <p className="text-muted-foreground text-xs leading-relaxed">
+                            Tap to rewrite this prompt using a <span className="font-bold text-foreground">{promptStyle === 'Creative' ? 'Detailed' : 'Creative'}</span> strategy.
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card
+                      className="cursor-pointer hover:border-primary/50 transition-colors bg-gradient-to-br from-card to-muted/20"
+                      onClick={() => setAudience(audience.toLowerCase().includes('enterprise') ? 'Startups & SMBs' : 'Enterprise / B2B')}
+                    >
+                      <CardContent className="p-4 flex gap-3 text-sm">
+                        <div className="p-2 bg-emerald-100 dark:bg-emerald-900/50 rounded-lg h-fit">
+                          <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground mb-1">Pivot Audience</p>
+                          <p className="text-muted-foreground text-xs leading-relaxed">
+                            What if you targeted <span className="font-bold text-foreground">{audience.toLowerCase().includes('enterprise') ? 'Startups & SMBs' : 'Enterprise'}</span> instead? Tap to test.
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              )}
 
               {/* Affiliate / Partner Section */}
               <Card className="border-border/40 shadow-sm bg-card/80 backdrop-blur-sm">
@@ -877,6 +1437,298 @@ export default function App() {
 
         </div>
       </main>
+
+      {/* Avatar Selection Dialog */}
+      <Dialog open={showAvatarDialog} onOpenChange={setShowAvatarDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Choose Your Avatar</DialogTitle>
+            <DialogDescription>
+              Select an avatar to personalize your profile.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-4 gap-4 py-4">
+            {avatarFiles.map((url, i) => (
+              <button
+                key={i}
+                onClick={async () => {
+                  if (!user) return;
+                  try {
+                    await updateProfile(user, { photoURL: url });
+                    setShowAvatarDialog(false);
+                    // Force a re-render of user state (re-auth check or manual object update)
+                    setUser({ ...user, photoURL: url } as any);
+                    toast.success("Avatar updated!");
+                  } catch (e) {
+                    toast.error("Failed to update avatar.");
+                  }
+                }}
+                className={`rounded-full overflow-hidden border-2 w-16 h-16 transition-all hover:scale-105 hover:border-primary focus:outline-none ${user?.photoURL === url ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background' : 'border-transparent'}`}
+              >
+                <img src={url} alt={`Avatar ${i + 1}`} className="w-full h-full object-cover bg-indigo-50" referrerPolicy="no-referrer" />
+              </button>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-start">
+            <Button type="button" variant="secondary" onClick={() => setShowAvatarDialog(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* History Dialog */}
+      <Dialog open={showHistoryDialog} onOpenChange={setShowHistoryDialog}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <DialogTitle className="flex items-center gap-2">
+                  <History className="w-5 h-5 text-indigo-600" />
+                  Prompt History
+                </DialogTitle>
+                <DialogDescription>
+                  Previously generated prompts saved to your account.
+                </DialogDescription>
+              </div>
+              {historyPrompts.length > 0 && !isLoadingHistory && (
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={exportHistory}>
+                    <Download className="w-4 h-4 mr-2" />
+                    <span className="hidden sm:inline">Export JSON</span>
+                    <span className="sm:hidden">JSON</span>
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={exportHistoryCSV}>
+                    <Download className="w-4 h-4 mr-2" />
+                    <span className="hidden sm:inline">Export CSV</span>
+                    <span className="sm:hidden">CSV</span>
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={confirmClearHistory}>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Clear All
+                  </Button>
+                </div>
+              )}
+            </div>
+          </DialogHeader>
+
+          {historyPrompts.length > 0 && (
+            <div className="flex flex-col gap-3 mt-4">
+              <div className="flex items-center justify-between border-b border-border pb-2">
+                <div className="flex gap-4">
+                  <button 
+                    className={`pb-2 text-sm font-medium transition-colors border-b-2 ${historyTab === 'all' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setHistoryTab('all')}
+                  >
+                    All Prompts
+                  </button>
+                  <button 
+                    className={`pb-2 text-sm font-medium transition-colors border-b-2 flex items-center gap-1 ${historyTab === 'favorites' ? 'border-amber-400 text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setHistoryTab('favorites')}
+                  >
+                    <Star className={`w-3.5 h-3.5 ${historyTab === 'favorites' ? 'fill-amber-400 text-amber-400' : ''}`} />
+                    Favorites
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Sort By:</span>
+                  <select 
+                    title="Sort History"
+                    className="text-sm bg-transparent border-none outline-none font-medium cursor-pointer"
+                    value={historySortOption}
+                    onChange={(e) => setHistorySortOption(e.target.value)}
+                  >
+                    <option value="date_desc">Newest First</option>
+                    <option value="date_asc">Oldest First</option>
+                    <option value="niche_asc">Niche A-Z</option>
+                    <option value="niche_desc">Niche Z-A</option>
+                    <option value="audience_asc">Audience A-Z</option>
+                    <option value="audience_desc">Audience Z-A</option>
+                  </select>
+                </div>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="search"
+                  placeholder="Search history..."
+                  className="pl-9 bg-muted/50 w-full"
+                  value={historySearchQuery}
+                  onChange={(e) => setHistorySearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+          
+          <ScrollArea className="flex-1 -mx-6 px-6 mt-4">
+            {isLoadingHistory ? (
+              <div className="py-8 text-center text-muted-foreground">Loading history...</div>
+            ) : historyPrompts.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                No saved prompts yet. Generate a prompt and click "Save".
+              </div>
+            ) : (() => {
+              const filteredHistory = historyPrompts.filter(prompt => {
+                const matchesSearch = (prompt.niche || "").toLowerCase().includes(historySearchQuery.toLowerCase()) || 
+                                      (prompt.promptText || "").toLowerCase().includes(historySearchQuery.toLowerCase());
+                const matchesTab = historyTab === 'favorites' ? prompt.isFavorite === true : true;
+                return matchesSearch && matchesTab;
+              });
+              
+              if (filteredHistory.length === 0) {
+                return <div className="py-8 text-center text-muted-foreground">{historyTab === 'favorites' ? 'No favorite prompts found.' : 'No prompts match your search.'}</div>;
+              }
+
+              return (
+                <div className="space-y-4 pb-4">
+                  {filteredHistory.map((prompt) => (
+                    <Card key={prompt.id} className="border-border relative">
+                      <CardHeader className="py-4 bg-muted/30">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1 pl-8 relative">
+                            <button
+                              onClick={() => toggleFavorite(prompt.id, prompt.isFavorite)}
+                              className="absolute left-0 top-0.5 text-muted-foreground hover:text-amber-400 transition-colors"
+                              title={prompt.isFavorite ? "Remove from favorites" : "Add to favorites"}
+                            >
+                              <Star className={`w-5 h-5 ${prompt.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
+                            </button>
+                            <CardTitle className="text-lg truncate">{prompt.niche}</CardTitle>
+                            <CardDescription className="truncate">Targeting: {prompt.audience}</CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <Button 
+                              size="sm" 
+                              variant="secondary" 
+                              onClick={() => {
+                                navigator.clipboard.writeText(prompt.promptText);
+                                toast.success("Prompt copied!");
+                              }}
+                            >
+                              <Copy className="w-4 h-4 sm:mr-2" />
+                              <span className="hidden sm:inline">Copy</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => {
+                                const opts = (prompt.options || []).join(',');
+                                const st = prompt.style || 'Standard';
+                                const url = `${window.location.origin}?niche=${encodeURIComponent(prompt.niche)}&audience=${encodeURIComponent(prompt.audience)}&options=${opts}&style=${encodeURIComponent(st)}`;
+                                navigator.clipboard.writeText(url);
+                                toast.success("Shareable link copied to clipboard!");
+                              }}
+                            >
+                              <Share2 className="w-4 h-4 sm:mr-2" />
+                              <span className="hidden sm:inline">Share</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-destructive hover:bg-destructive/10"
+                              onClick={() => confirmDeletePrompt(prompt.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="py-4">
+                        <div className="relative">
+                          <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground line-clamp-3">
+                            {prompt.promptText}
+                          </pre>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                  <div ref={observerTarget} className="h-4 w-full" />
+                  {isLoadingMoreHistory && (
+                    <div className="py-4 text-center text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin inline mr-2"/> Loading more...</div>
+                  )}
+                </div>
+              );
+            })()}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfDialog.isOpen} onOpenChange={(open) => !open && setDeleteConfDialog({ isOpen: false, type: 'single' })}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-destructive" />
+              {deleteConfDialog.type === 'all' ? 'Clear History' : 'Delete Prompt'}
+            </DialogTitle>
+            <DialogDescription className="pt-2">
+              {deleteConfDialog.type === 'all' 
+                ? 'Are you sure you want to delete ALL saved prompts? This action cannot be undone.'
+                : 'Are you sure you want to delete this prompt? This action cannot be undone.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end mt-4">
+            <Button variant="outline" onClick={() => setDeleteConfDialog({ isOpen: false, type: 'single' })}>
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive"
+              onClick={() => {
+                if (deleteConfDialog.type === 'all') {
+                  clearHistory();
+                } else if (deleteConfDialog.id) {
+                  deletePrompt(deleteConfDialog.id);
+                }
+                setDeleteConfDialog({ isOpen: false, type: 'single' });
+              }}
+            >
+              {deleteConfDialog.type === 'all' ? 'Clear All' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Complexity Warning Dialog */}
+      <Dialog open={showComplexityDialog} onOpenChange={setShowComplexityDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BrainCircuit className="w-5 h-5 text-amber-500" />
+              Cognitive Overload Warning
+            </DialogTitle>
+            <DialogDescription className="pt-2 text-base text-foreground/90">
+              This will generate a highly complex output. Do you want to split this into phases? We guide you to success, rather than letting you drown in the output.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 mt-4">
+            <Button 
+              size="lg"
+              className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold"
+              onClick={() => {
+                setShowComplexityDialog(false);
+                setPendingSelection(null);
+                toast.info("Try to focus your prompt on 3-5 core areas first for the best result.");
+              }}
+            >
+              Split into Phases (Recommended)
+            </Button>
+            <Button 
+              size="lg"
+              variant="outline"
+              className="w-full font-medium"
+              onClick={() => {
+                if (pendingSelection) {
+                  setSelectedOptions(pendingSelection);
+                }
+                setShowComplexityDialog(false);
+                setPendingSelection(null);
+              }}
+            >
+              Generate Master Prompt Anyway
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Email Capture Dialog */}
       <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
