@@ -1,5 +1,6 @@
 {
   "name": "Foundeck",
-  "description": "Identifies high-scalability, high-profit-margin SaaS solutions based on simulated Reddit/Meta complaints.",
-  "requestFramePermissions": []
+  "description": "Master AI Prompt Builder for startup founders, featuring custom deliverables, A/B tested prompt tones, and instant Pro unlock.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

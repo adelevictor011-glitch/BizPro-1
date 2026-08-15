@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Joyride, CallBackProps, STATUS } from "react-joyride";
+import { Joyride, STATUS } from "react-joyride";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -230,6 +230,14 @@ const EXAMPLES = [
   }
 ];
 
+// Admin configuration
+export const ADMIN_EMAILS = ["marinamary202122@gmail.com"];
+
+export const isAdminEmail = (email?: string | null): boolean => {
+  if (!email) return false;
+  return ADMIN_EMAILS.includes(email.toLowerCase().trim());
+};
+
 export default function App() {
   const [niche, setNiche] = useState("");
   const [audience, setAudience] = useState("");
@@ -313,6 +321,10 @@ export default function App() {
   const [hasProvidedEmail, setHasProvidedEmail] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
+  // Admin and effective Pro status computation
+  const isUserAdmin = useMemo(() => isAdminEmail(user?.email), [user?.email]);
+  const effectiveIsPro = useMemo(() => hasUnlockedPremium || isUserAdmin, [hasUnlockedPremium, isUserAdmin]);
+
   // History state
   const [showHistoryDialog, setShowHistoryDialog] = useState(false);
   const [historyPrompts, setHistoryPrompts] = useState<any[]>([]);
@@ -386,6 +398,12 @@ export default function App() {
       if (currentUser) {
         setEmail(currentUser.email || "");
         setHasProvidedEmail(true);
+        const adminAccount = isAdminEmail(currentUser.email);
+        
+        // Immediately grant Pro access to admin
+        if (adminAccount) {
+          setHasUnlockedPremium(true);
+        }
         
         // Check Firestore for Pro status
         try {
@@ -393,18 +411,28 @@ export default function App() {
           const userDoc = await getDoc(userDocRef);
           
           if (userDoc.exists()) {
-            setHasUnlockedPremium(userDoc.data().isPro === true);
+            const data = userDoc.data();
+            const shouldBePro = adminAccount || data.isPro === true;
+            setHasUnlockedPremium(shouldBePro);
+            
+            // Auto-heal admin record in Firestore so isPro is saved as true
+            if (adminAccount && !data.isPro) {
+              await setDoc(userDocRef, { ...data, isPro: true }, { merge: true });
+            }
           } else {
-            // Create profile
+            // Create profile with isPro true for admin
             await setDoc(userDocRef, {
               email: currentUser.email,
-              isPro: false,
+              isPro: adminAccount,
               createdAt: serverTimestamp()
             });
-            setHasUnlockedPremium(false);
+            setHasUnlockedPremium(adminAccount);
           }
         } catch (error: any) {
           console.error("Error fetching user profile:", error);
+          if (adminAccount) {
+            setHasUnlockedPremium(true);
+          }
           if (error?.message?.includes("client is offline") || error?.message?.includes("offline")) {
             toast.error("Database connection blocked. Please disable your AdBlocker or VPN.");
           }
@@ -471,7 +499,7 @@ export default function App() {
 
   const applySelectionChange = (newSet: Set<string>) => {
     // 1. Enforce Free tier global limit (max 9)
-    if (!hasUnlockedPremium && newSet.size > 9) {
+    if (!effectiveIsPro && newSet.size > 9) {
       setShowPremiumDialog(true);
       toast.error("Free tier is limited to 9 total selections. Unlock Pro for unlimited access.");
       return;
@@ -493,7 +521,7 @@ export default function App() {
       return;
     }
 
-    const newSet = new Set(selectedOptions);
+    const newSet = new Set<string>(selectedOptions);
     if (newSet.has(id)) {
       newSet.delete(id);
     } else {
@@ -503,11 +531,11 @@ export default function App() {
   };
 
   const handleSelectAll = (categoryOptions: {id: string}[], categoryId: string, isPremiumCategory: boolean) => {
-    const newSet = new Set(selectedOptions);
+    const newSet = new Set<string>(selectedOptions);
     
     // Only select unlocked options
     const unlockedOptions = categoryOptions.filter((_, index) => {
-      const isLocked = isPremiumCategory && !hasUnlockedPremium && index >= 3;
+      const isLocked = isPremiumCategory && !effectiveIsPro && index >= 3;
       return !isLocked;
     });
 
@@ -541,7 +569,7 @@ export default function App() {
     
     setCustomInputs(prev => ({ ...prev, [categoryId]: "" }));
     
-    const newSet = new Set(selectedOptions);
+    const newSet = new Set<string>(selectedOptions);
     newSet.add(newOpt.id);
     applySelectionChange(newSet);
   };
@@ -863,10 +891,22 @@ export default function App() {
   }, [showHistoryDialog, user, historySortOption]);
 
   const handleUnlockPremium = async () => {
-
     if (!user) {
       toast.error("Please log in first to unlock Pro.");
       handleLogin();
+      return;
+    }
+
+    if (isUserAdmin) {
+      toast.success("Admin bypass active: Free Pro features are permanently enabled!");
+      setHasUnlockedPremium(true);
+      setShowPremiumDialog(false);
+      return;
+    }
+
+    if (effectiveIsPro) {
+      toast.info("You already have full access to Foundeck Pro!");
+      setShowPremiumDialog(false);
       return;
     }
 
@@ -970,17 +1010,19 @@ export default function App() {
   return (
     <div className="min-h-screen relative bg-slate-50 dark:bg-slate-950 text-foreground selection:bg-indigo-500/30 pb-24 font-sans isolation-auto transition-colors duration-300">
       <Joyride
-        steps={tourSteps}
-        run={runTour}
-        continuous={true}
-        showProgress={true}
-        showSkipButton={true}
-        callback={handleJoyrideCallback}
-        styles={{
-          options: {
-            primaryColor: '#4f46e5',
+        {...({
+          steps: tourSteps,
+          run: runTour,
+          continuous: true,
+          showProgress: true,
+          showSkipButton: true,
+          callback: handleJoyrideCallback,
+          styles: {
+            options: {
+              primaryColor: '#4f46e5',
+            }
           }
-        }}
+        } as any)}
       />
       {/* Subtle modern background radial gradient for depth */}
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-100/60 via-transparent to-transparent dark:from-indigo-900/20 dark:via-background dark:to-background pointer-events-none"></div>
@@ -1004,7 +1046,15 @@ export default function App() {
               Community & Help
             </Button>
             
-            {!hasUnlockedPremium && (
+            {effectiveIsPro ? (
+              <div 
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 shadow-sm"
+                title={isUserAdmin ? "Admin account with permanent free Pro access" : "Foundeck Pro Active"}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>{isUserAdmin ? "Admin Pro (Free)" : "Pro Plan"}</span>
+              </div>
+            ) : (
               <Button variant="outline" size="sm" onClick={() => setShowPremiumDialog(true)} className="flex border-amber-500/50 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 bg-amber-50 dark:bg-amber-500/10 shadow-sm tour-step-6">
                 <Lock className="w-3.5 h-3.5 sm:mr-2" />
                 <span className="hidden sm:inline">Unlock Pro ($15)</span>
@@ -1191,7 +1241,7 @@ export default function App() {
                   const allCatOptions = [...category.options, ...customOpts];
                   
                   // Check if all UNLOCKED options are selected
-                  const unlockedOptions = category.options.filter((_, idx) => !(category.isPremium && !hasUnlockedPremium && idx >= 3));
+                  const unlockedOptions = category.options.filter((_, idx) => !(category.isPremium && !effectiveIsPro && idx >= 3));
                   const allAvailable = [...unlockedOptions, ...customOpts];
                   const allSelected = allAvailable.length > 0 && allAvailable.every(opt => selectedOptions.has(opt.id));
                   
@@ -1218,9 +1268,9 @@ export default function App() {
                         <div className="space-y-3">
                           {/* Default Options */}
                           {category.options.map((opt, index) => {
-                            const isLocked = category.isPremium && !hasUnlockedPremium && index >= 3;
+                            const isLocked = category.isPremium && !effectiveIsPro && index >= 3;
                             const isSelected = selectedOptions.has(opt.id);
-                            const hitFreeLimit = !hasUnlockedPremium && selectedOptions.size >= 9;
+                            const hitFreeLimit = !effectiveIsPro && selectedOptions.size >= 9;
                             const isDisabled = isLocked || (hitFreeLimit && !isSelected);
                             
                             return (
@@ -1257,7 +1307,7 @@ export default function App() {
                           {/* Custom Options */}
                           {customOpts.map(opt => {
                             const isSelected = selectedOptions.has(opt.id);
-                            const hitFreeLimit = !hasUnlockedPremium && selectedOptions.size >= 9;
+                            const hitFreeLimit = !effectiveIsPro && selectedOptions.size >= 9;
                             const isDisabled = hitFreeLimit && !isSelected;
 
                             return (
@@ -1782,6 +1832,17 @@ export default function App() {
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 space-y-4">
+            {isUserAdmin ? (
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 text-emerald-800 dark:text-emerald-300">
+                <div className="flex items-center gap-2 font-semibold mb-1">
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>Admin Bypass Active</span>
+                </div>
+                <p className="text-xs opacity-90">
+                  Logged in as <strong className="underline">{user?.email}</strong>. All Pro features, advanced categories, and unlimited selections are free and active.
+                </p>
+              </div>
+            ) : null}
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
               <h4 className="font-semibold text-amber-700 mb-2">Pro Plan Includes:</h4>
               <ul className="space-y-2 text-sm text-amber-700/80">
@@ -1791,9 +1852,15 @@ export default function App() {
               </ul>
             </div>
             <div className="grid grid-cols-1 gap-3">
-              <Button onClick={handleUnlockPremium} className="w-full bg-[#092E20] hover:bg-[#092E20]/90 text-white h-12 text-base">
-                Unlock Pro for $15.00 (Paystack)
-              </Button>
+              {isUserAdmin ? (
+                <Button onClick={() => setShowPremiumDialog(false)} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white h-12 text-base">
+                  Got it (Pro Active)
+                </Button>
+              ) : (
+                <Button onClick={handleUnlockPremium} className="w-full bg-[#092E20] hover:bg-[#092E20]/90 text-white h-12 text-base">
+                  Unlock Pro for $15.00 (Paystack)
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>

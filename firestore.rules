@@ -35,6 +35,10 @@ service cloud.firestore {
       return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
     }
 
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.email.lower() == 'marinamary202122@gmail.com';
+    }
+
     function isValidUser(data) {
       return hasOnlyAllowedFields(['email', 'isPro', 'createdAt']) &&
              isValidEmail(data.email) &&
@@ -65,29 +69,29 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isOwner(userId);
+      allow read: if isOwner(userId) || isAdmin();
       
       allow create: if isOwner(userId) && 
                     isValidUser(request.resource.data) && 
-                    request.resource.data.isPro == false;
+                    (request.resource.data.isPro == false || (isAdmin() && request.resource.data.isPro == true));
       
       allow update: if isOwner(userId) && 
                     isValidUser(request.resource.data) &&
                     request.resource.data.createdAt == resource.data.createdAt &&
                     request.resource.data.email == resource.data.email &&
-                    request.resource.data.isPro == resource.data.isPro;
+                    (request.resource.data.isPro == resource.data.isPro || isAdmin());
                     
       match /prompts/{promptId} {
-        allow read: if isOwner(userId);
+        allow read: if isOwner(userId) || isAdmin();
         allow create: if isOwner(userId) && isValidPromptHistory(request.resource.data, userId);
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId) || isAdmin();
         allow update: if false; // history shouldn't change
       }
     }
 
     match /feedback/{feedbackId} {
       allow create: if isValidFeedback(request.resource.data);
-      allow read, update, delete: if false; // Only admin backend can read/manage feedback
+      allow read, update, delete: if isAdmin(); // Admin can view feedback
     }
   }
 }
